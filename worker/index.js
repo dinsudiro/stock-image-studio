@@ -54,18 +54,24 @@ export default {
       return reply(400, { error: 'Check the prompt and output quality.' });
     }
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), generating ? 180000 : 30000);
     try {
       const model = MODELS[provider];
-      const signal = AbortSignal.timeout(generating ? 180000 : 12000);
+      const { signal } = controller;
       const result = await runProvider(provider, { key, model, prompt, quality, generating, signal });
       if (!generating) return reply(200, { model });
       if (!result) return reply(502, { error: 'The provider returned no usable image.' });
       headers.set('Content-Type', result.type);
       return new Response(result.body, { headers });
     } catch (error) {
-      return reply(error instanceof ProviderError ? error.status : 502, {
-        error: error instanceof ProviderError ? error.message : 'The provider could not be reached or timed out.',
-      });
+      if (controller.signal.aborted) return reply(504, { error: 'The provider response timed out.' });
+      if (error instanceof ProviderError) {
+        return reply(error.status, { error: error.message });
+      }
+      return reply(502, { error: 'The Worker could not read the provider response.' });
+    } finally {
+      clearTimeout(timeout);
     }
   },
 };
@@ -105,11 +111,21 @@ class ProviderError extends Error {
 }
 
 async function fetchProvider(url, options) {
-  const response = await fetch(url, { ...options, redirect: 'error' });
+  let response;
+  try {
+    response = await fetch(url, { ...options, redirect: 'manual' });
+  } catch {
+    throw new ProviderError(502, 'The Worker could not connect to the provider endpoint.');
+  }
   if (response.ok) return response;
+  if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel();
+    throw new ProviderError(502, 'The provider endpoint returned a redirect.');
+  }
   const details = await response.json().catch(() => ({}));
-  const code = details.error?.code;
-  if (details.error?.details?.some?.(detail => detail?.reason === 'API_KEY_INVALID')) {
+  const code = details?.error?.code;
+  if (Array.isArray(details?.error?.details) && details.error.details.some(detail =>
+    ['API_KEY_INVALID', 'ACCESS_TOKEN_TYPE_UNSUPPORTED'].includes(detail?.reason))) {
     throw new ProviderError(422, 'Google rejected this API key. Check that it is active in Google AI Studio.');
   }
   if (response.status === 402 || ['billing_hard_limit_reached', 'insufficient_quota'].includes(code)) {
