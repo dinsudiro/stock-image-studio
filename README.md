@@ -69,7 +69,7 @@ AI provider secrets belong in a backend. Vite variables are visible to site visi
 
 Generated raster assets must not be mislabeled as editable vectors. Platform-specific rules and AI disclosure must be versioned and verified against current official requirements. Human QC and licensing review are required before submission. Multi-angle generative outputs are not guaranteed geometrically identical.
 
-## OpenAI BYOK
+## AI provider BYOK
 
 Deploy the Worker on Cloudflare Workers Free:
 
@@ -79,12 +79,12 @@ npx wrangler deploy
 ```
 
 Set the GitHub Actions repository variable `VITE_OPENAI_WORKER_URL` to the HTTPS
-Worker URL, then run **Deploy to GitHub Pages**. The Worker verifies Firebase
-ID tokens, accepts browser requests from the production Pages origin, and sends
-generation requests to the selected provider. Firebase Spark handles authentication and workspace
-storage.
+Worker URL, then run **Deploy to GitHub Pages**. The Worker accepts BYOK requests from the production Pages origin and forwards
+the supplied key only to its selected provider. Each provider authenticates its
+own key and bills the associated account. Firebase login is used for cloud
+workspace storage.
 
-After Firebase sign-in, choose OpenAI Images, Google Gemini, or FLUX (Black Forest Labs)
+Choose OpenAI Images, Google Gemini, or FLUX (Black Forest Labs)
 in **Settings → AI providers · BYOK** and verify that provider’s API key. The key stays in tab memory and is sent via HTTPS only when verifying the
 key or generating an image. Choose a connected provider in the Generator. Single, multi-angle, and batch
 outputs are generated in sequence and can be downloaded individually. Image
