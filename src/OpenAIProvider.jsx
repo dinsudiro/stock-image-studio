@@ -3,7 +3,13 @@ import { KeyRound } from 'lucide-react';
 
 const endpoint = import.meta.env.VITE_OPENAI_WORKER_URL;
 
-export async function requestOpenAI(user, body) {
+export const providers = {
+  openai: 'OpenAI Images',
+  gemini: 'Google Gemini',
+  flux: 'FLUX · Black Forest Labs',
+};
+
+export async function requestProvider(user, body) {
   let response;
   const token = await user.getIdToken();
   try {
@@ -14,22 +20,23 @@ export async function requestOpenAI(user, body) {
       cache: 'no-store',
     });
   } catch {
-    throw new Error('The OpenAI backend is unreachable. Try again later.');
+    throw new Error('The generation backend is unreachable. Try again later.');
   }
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
-    throw new Error(result.error || 'The OpenAI backend could not complete this request.');
+    throw new Error(result.error || 'The generation backend could not complete this request.');
   }
   if (body.action === 'generate') {
-    if (!response.headers.get('content-type')?.startsWith('image/png')) {
-      throw new Error('The OpenAI backend returned an unexpected file.');
+    if (!/^image\/(png|jpeg|webp)(;|$)/i.test(response.headers.get('content-type') ?? '')) {
+      throw new Error('The generation backend returned an unexpected file.');
     }
     return response.blob();
   }
   return response.json();
 }
 
-export default function OpenAIProvider({ user, connected, onConnect, onDisconnect }) {
+export default function ProviderSettings({ user, connected, onConnect, onDisconnect }) {
+  const [provider, setProvider] = useState('openai');
   const [key, setKey] = useState('');
   const [available, setAvailable] = useState(undefined);
   const [busy, setBusy] = useState(false);
@@ -43,20 +50,23 @@ export default function OpenAIProvider({ user, connected, onConnect, onDisconnec
     const controller = new AbortController();
     fetch(endpoint, { cache: 'no-store', signal: controller.signal })
       .then(response => response.ok ? response.json() : null)
-      .then(data => setAvailable(Boolean(data?.model)))
+      .then(data => setAvailable(data?.providers ?? (data?.model ? { openai: data.model } : false)))
       .catch(() => { if (!controller.signal.aborted) setAvailable(false); });
     return () => controller.abort();
   }, []);
 
+  const connection = connected[provider];
+  const supported = Boolean(available?.[provider]);
+
   async function verify(event) {
     event.preventDefault();
     const enteredKey = key.trim();
-    if (!available || !user || !enteredKey || busy) return;
+    if (!supported || !user || !enteredKey || busy) return;
     setBusy(true);
     setError('');
     try {
-      const { model } = await requestOpenAI(user, { key: enteredKey, action: 'verify' });
-      onConnect({ key: enteredKey, model, uid: user.uid });
+      const { model } = await requestProvider(user, { provider, key: enteredKey, action: 'verify' });
+      onConnect(provider, { key: enteredKey, model });
       setKey('');
     } catch (problem) {
       setError(problem.message);
@@ -67,20 +77,29 @@ export default function OpenAIProvider({ user, connected, onConnect, onDisconnec
 
   return (
     <section className="panel">
-      <h3>OpenAI · BYOK</h3>
+      <h3>AI providers · BYOK</h3>
+      <label htmlFor="byok-provider">Provider</label>
+      <select id="byok-provider" value={provider} disabled={busy} onChange={event => {
+        setKey('');
+        setError('');
+        setProvider(event.target.value);
+      }}>
+        {Object.entries(providers).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+      </select>
       <div className="provider">
         <div className="providericon"><KeyRound size={18}/></div>
         <div>
-          <b>OpenAI Images</b>
-          <small>{connected ? 'Key verified · ' + connected.model : 'Disconnected'}</small>
+          <b>{providers[provider]}</b>
+          <small>{connection ? 'Key verified · ' + connection.model : 'Disconnected'}</small>
         </div>
       </div>
       {available === undefined && <p role="status">Checking the generation backend…</p>}
       {available === false && <p role="status">The Cloudflare Worker is unavailable. Check its deployment and URL before verifying your key.</p>}
       {!user && <p>Sign in under Firebase workspace to connect an API key.</p>}
-      {available && user && !connected && (
+      {available && !supported && <p role="status">Deploy the latest Worker to enable {providers[provider]}.</p>}
+      {supported && user && !connection && (
         <form onSubmit={verify} autoComplete="off">
-          <label htmlFor="openai-key">OpenAI project API key</label>
+          <label htmlFor="openai-key">{providers[provider]} API key</label>
           <input id="openai-key" type="password" autoComplete="off" spellCheck={false}
             value={key} onChange={event => setKey(event.target.value)} maxLength={503} required />
           <button className="primary full" disabled={busy || !key.trim()}>
@@ -88,9 +107,9 @@ export default function OpenAIProvider({ user, connected, onConnect, onDisconnec
           </button>
         </form>
       )}
-      {connected && <button className="outline full" onClick={() => { setError(''); onDisconnect(); }}>Disconnect OpenAI</button>}
+      {connection && <button className="outline full" onClick={() => { setError(''); onDisconnect(provider); }}>Disconnect provider</button>}
       {error && <p role="alert">{error}</p>}
-      <p className="notice">The key stays in memory for this tab session. OpenAI bills image requests to your API project.</p>
+      <p className="notice">The key stays in memory for this tab session. Image requests use the selected provider’s billing and quota.</p>
     </section>
   );
 }
