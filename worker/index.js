@@ -1,6 +1,10 @@
 const PROJECT_ID = 'stock-image-studio';
 const APP_ORIGIN = 'https://dinsudiro.github.io';
-const MODEL = 'gpt-image-2.5-flare';
+const MODELS = {
+  openai: 'gpt-image-2.5-flare',
+  gemini: 'gemini-2.5-flash-image',
+  flux: 'flux-2-pro',
+};
 const KEY_URL = 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
 let keyCache;
 
@@ -54,7 +58,7 @@ export default {
 
     if (new URL(request.url).pathname !== '/') return reply(404, { error: 'Not found.' });
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-    if (request.method === 'GET') return reply(200, { model: MODEL });
+    if (request.method === 'GET') return reply(200, { model: MODELS.openai, providers: MODELS });
     if (request.method !== 'POST') return reply(405, { error: 'Use POST.' });
 
     const token = request.headers.get('Authorization')?.match(/^Bearer (\S+)$/)?.[1];
@@ -72,9 +76,11 @@ export default {
       return reply(400, { error: 'Expected a JSON request.' });
     }
 
-    const { action, key, prompt, quality } = input ?? {};
-    if (typeof key !== 'string' || !/^sk-[A-Za-z0-9_-]{20,500}$/.test(key)) {
-      return reply(400, { error: 'Enter a valid OpenAI project API key.' });
+    const { provider = 'openai', action, key, prompt, quality } = input ?? {};
+    if (!Object.hasOwn(MODELS, provider)) return reply(400, { error: 'Unsupported provider.' });
+    if (typeof key !== 'string' || !/^[A-Za-z0-9_-]{15,503}$/.test(key) ||
+        (provider === 'openai' && !key.startsWith('sk-'))) {
+      return reply(400, { error: 'Enter a valid API key for the selected provider.' });
     }
 
     const generating = action === 'generate';
@@ -84,39 +90,116 @@ export default {
       return reply(400, { error: 'Check the prompt and output quality.' });
     }
 
-    const path = generating ? 'images/generations' : 'models/' + MODEL;
-    const body = generating ? JSON.stringify({
-      model: MODEL, prompt, quality, n: 1,
-      size: '1024x1024', output_format: 'png', background: 'transparent',
-    }) : undefined;
     try {
-      const upstream = await fetch('https://api.openai.com/v1/' + path, {
-        method: generating ? 'POST' : 'GET',
-        headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-        body, redirect: 'error', signal: AbortSignal.timeout(generating ? 180000 : 10000),
+      const model = MODELS[provider];
+      const signal = AbortSignal.timeout(generating ? 180000 : 12000);
+      const result = await runProvider(provider, { key, model, prompt, quality, generating, signal });
+      if (!generating) return reply(200, { model });
+      if (!result) return reply(502, { error: 'The provider returned no usable image.' });
+      headers.set('Content-Type', result.type);
+      return new Response(result.body, { headers });
+    } catch (error) {
+      return reply(error instanceof ProviderError ? error.status : 502, {
+        error: error instanceof ProviderError ? error.message : 'The provider could not be reached or timed out.',
       });
-      if (!upstream.ok) {
-        const details = await upstream.json().catch(() => ({}));
-        const errors = {
-          400: 'OpenAI rejected the request. Check the prompt and model options.',
-          401: 'OpenAI rejected this key. Check that it is active.',
-          403: 'The OpenAI project or key lacks access to the image model.',
-          404: 'The image model is unavailable to this OpenAI project.',
-          429: 'OpenAI rate or quota limits were reached.',
-        };
-        const billing = ['billing_hard_limit_reached', 'insufficient_quota'].includes(details.error?.code);
-        const status = upstream.status === 401 ? 422 : errors[upstream.status] ? upstream.status : 502;
-        return reply(status, { error: billing ? 'Check billing and credits in your OpenAI project.' :
-          errors[upstream.status] ?? 'OpenAI could not complete the request.' });
-      }
-      if (!generating) return reply(200, { model: MODEL });
-      const result = await upstream.json();
-      const image = result.data?.[0]?.b64_json;
-      if (!image) return reply(502, { error: 'OpenAI returned no image.' });
-      headers.set('Content-Type', 'image/png');
-      return new Response(decodeBase64(image), { headers });
-    } catch {
-      return reply(502, { error: 'Could not reach OpenAI or the request timed out.' });
     }
   },
 };
+
+class ProviderError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function fetchProvider(url, options) {
+  const response = await fetch(url, { ...options, redirect: 'error' });
+  if (response.ok) return response;
+  const details = await response.json().catch(() => ({}));
+  const code = details.error?.code;
+  if (response.status === 402 || ['billing_hard_limit_reached', 'insufficient_quota'].includes(code)) {
+    throw new ProviderError(402, 'Check billing and credits for this provider.');
+  }
+  const errors = {
+    400: 'The provider rejected the request. Check the key or prompt.',
+    401: 'The provider rejected this API key.',
+    403: 'The provider denied access. Check API key permissions, model access, and billing.',
+    404: 'The selected model or provider resource is unavailable.',
+    429: 'The provider rate limit or quota was reached.',
+  };
+  throw new ProviderError(response.status === 401 ? 422 : errors[response.status] ? response.status : 502,
+    errors[response.status] ?? 'The provider could not complete the request.');
+}
+
+function imageFromBase64(data, type) {
+  if (typeof data !== 'string' || !data || !['image/png', 'image/jpeg', 'image/webp'].includes(type)) return null;
+  return { body: decodeBase64(data), type };
+}
+
+function safeBflUrl(value, allowedHost) {
+  const url = new URL(value);
+  if (url.protocol !== 'https:' || url.port || url.username || url.password || !allowedHost(url.hostname)) {
+    throw new ProviderError(502, 'FLUX returned an unexpected URL.');
+  }
+  return url;
+}
+
+async function runProvider(provider, { key, model, prompt, quality, generating, signal }) {
+  const json = { 'Content-Type': 'application/json' };
+  if (provider === 'openai') {
+    const headers = { ...json, Authorization: 'Bearer ' + key };
+    const url = 'https://api.openai.com/v1/' + (generating ? 'images/generations' : 'models/' + model);
+    const body = generating ? JSON.stringify({
+      model, prompt, quality, n: 1, size: '1024x1024', output_format: 'png', background: 'transparent',
+    }) : undefined;
+    const response = await fetchProvider(url, { method: generating ? 'POST' : 'GET', headers, body, signal });
+    if (!generating) return;
+    return imageFromBase64((await response.json()).data?.[0]?.b64_json, 'image/png');
+  }
+
+  if (provider === 'gemini') {
+    const url = 'https://generativelanguage.googleapis.com/v1/models/' + model;
+    const headers = { ...json, 'x-goog-api-key': key };
+    const body = generating ? JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '1:1' } },
+    }) : undefined;
+    const response = await fetchProvider(url + (generating ? ':generateContent' : ''),
+      { method: generating ? 'POST' : 'GET', headers, body, signal });
+    if (!generating) return;
+    const result = await response.json();
+    const image = result.candidates?.flatMap(candidate => candidate.content?.parts ?? [])
+      .find(part => part.inlineData?.data)?.inlineData;
+    return imageFromBase64(image?.data, image?.mimeType);
+  }
+
+  const base = 'https://api.bfl.ai/v1/';
+  const headers = { ...json, 'x-key': key };
+  if (!generating) {
+    await fetchProvider(base + 'credits', { headers, signal });
+    return;
+  }
+  const submitted = await fetchProvider(base + model, {
+    method: 'POST', headers, signal,
+    body: JSON.stringify({ prompt, width: 1024, height: 1024, output_format: 'png' }),
+  });
+  const task = await submitted.json();
+  const poll = safeBflUrl(task.polling_url, host => ['api.bfl.ai', 'api.eu.bfl.ai', 'api.us.bfl.ai'].includes(host));
+  if (poll.pathname !== '/v1/get_result') throw new ProviderError(502, 'FLUX returned an unexpected polling path.');
+  for (let attempt = 0; attempt < 35; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 1800));
+    const result = await (await fetchProvider(poll, { headers, signal })).json();
+    if (result.status === 'Ready') {
+      const delivery = safeBflUrl(result.result?.sample, host => /^delivery\.[a-z0-9-]+\.bfl\.ai$/.test(host));
+      const image = await fetchProvider(delivery, { signal });
+      const type = image.headers.get('Content-Type')?.split(';')[0];
+      if (['image/png', 'image/jpeg', 'image/webp'].includes(type)) return { body: image.body, type };
+      return null;
+    }
+    if (result.status !== 'Pending' && result.status !== 'Processing') {
+      throw new ProviderError(422, 'FLUX did not complete this image. Check the prompt or provider dashboard.');
+    }
+  }
+  throw new ProviderError(504, 'FLUX is still processing. Check the provider dashboard before retrying.');
+}
