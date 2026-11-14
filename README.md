@@ -68,3 +68,23 @@ AI provider secrets belong in a backend. Vite variables are visible to site visi
 ### Safety and marketplace compliance
 
 Generated raster assets must not be mislabeled as editable vectors. Platform-specific rules and AI disclosure must be versioned and verified against current official requirements. Human QC and licensing review are required before submission. Multi-angle generative outputs are not guaranteed geometrically identical.
+
+## OpenAI BYOK
+
+Deploy the `studioOpenAI` HTTPS function to `stock-image-studio` using an
+authorized Firebase account. Firebase requires the Blaze plan for Cloud
+Functions. The deploy targets the function only and leaves existing Firestore
+rules in place.
+
+```bash
+npm ci --prefix functions
+firebase deploy --project stock-image-studio --only functions:studioOpenAI
+```
+
+The function accepts Firebase ID tokens and forwards requests only to OpenAI.
+Enter an OpenAI project API key in **Settings → OpenAI · BYOK** after Firebase
+sign-in. The key is held in memory, cleared on sign-out or reload, and sent
+over HTTPS only to the function per request. Verification checks model
+metadata without generating an image. The Generator can create and download
+one PNG at a time. Save larger jobs as drafts. Images stay in the current tab
+until downloaded. Model access, billing and quotas depend on the OpenAI project.
