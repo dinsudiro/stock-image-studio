@@ -15,14 +15,10 @@ function App(){const [tab,setTab]=useState('Dashboard'),[skills,setSkills]=useSt
 const [user, setUser] = useState(auth ? undefined : null);
 const [connections, setConnections] = useState({});
 const [provider, setProvider] = useState('openai');
-useEffect(() => auth ? onAuthStateChanged(auth, nextUser => {
-  setUser(nextUser);
-  setConnections(previous => Object.fromEntries(Object.entries(previous).filter(([, value]) => value.uid === nextUser?.uid)));
-}) : undefined, []);
-const connection = user && connections[provider]?.uid === user.uid ? connections[provider] : null;
+useEffect(() => auth ? onAuthStateChanged(auth, setUser) : undefined, []);
+const connection = connections[provider];
 function connectProvider(id, value) {
-  if (auth.currentUser?.uid !== user?.uid) return;
-  setConnections(previous => ({ ...previous, [id]: { ...value, uid: user.uid } }));
+  setConnections(previous => ({ ...previous, [id]: value }));
   setProvider(id);
 }
 function disconnectProvider(id) {
@@ -76,16 +72,14 @@ async function generateImage() {
   let completed = 0;
   try {
     for (const { item, angle } of outputs) {
-      if (auth.currentUser?.uid !== user.uid) break;
       const prompt = [
         'Subject: ' + item,
         angle && 'Camera angle: ' + angle,
         selectedSkill.prompt,
         selectedSkill.negative && 'Avoid: ' + selectedSkill.negative,
       ].filter(Boolean).join('\n');
-      const image = await requestProvider(user, { provider, action: 'generate', key: connection.key, prompt,
+      const image = await requestProvider({ provider, action: 'generate', key: connection.key, prompt,
         quality: quality === 'medium' ? 'medium' : 'high' });
-      if (auth.currentUser?.uid !== user.uid) break;
       const url = URL.createObjectURL(image);
       resultUrls.current.push(url);
       completed++;
@@ -107,7 +101,7 @@ return <div className="shell"><aside className={'sidebar '+(mobile?'show':'')}><
 {tab==='Skills'&&<section className="panel"><div className="sectionhead"><div><h3>Skill library</h3><p>Reusable art direction and prompt presets</p></div><button className="primary" onClick={()=>{setEditing(null);setShowSkill(true)}}><Plus size={17}/> Create skill</button></div><div className="skillgrid">{skills.map(s=><div className="skillcard" key={s.id}><div className="skillcover" style={{background:`linear-gradient(135deg,${s.color||'#98a8ff'},#e7ebff)`}}><span>✦</span></div><div className="skillbody"><span className="tag">{s.type}</span><h3>{s.name}</h3><p>{s.description}</p><div className="cardactions"><button onClick={()=>{setEditing(s);setShowSkill(true)}}>Edit</button><button onClick={()=>{setEditing({...s,name:s.name+' Copy',id:null});setShowSkill(true)}}><Copy size={14}/> Duplicate</button>{!['iso','kawaii'].includes(s.id)&&<button className="danger" onClick={()=>setSkills(p=>p.filter(x=>x.id!==s.id))}><Trash2 size={14}/></button>}</div></div></div>)}</div></section>}
 {tab==='Library'&&<section className="panel"><div className="sectionhead"><div><h3>Production jobs</h3><p>Job drafts and asset pipeline</p></div><button className="primary" onClick={()=>setTab('Generator')}><Plus size={17}/> New job</button></div>{jobs.length===0?<Empty icon={Images} title="No generation jobs yet" detail="Create a job to start building your production queue."/>:<div className="jobs">{jobs.map(j=><div className="job" key={j.id}><div><b>{j.subject}</b><small>{j.skill} · {j.mode} · {j.count} planned images</small><small><Clock size={12}/> {new Date(j.created).toLocaleString()}</small></div><div className="jobright"><span className="tag amber">Draft</span><button onClick={()=>openDraft(j)}>Open in Generator</button><button onClick={()=>downloadJSON('job-'+j.id+'.json',j)}>Export JSON</button><button className="iconbtn" title="Delete job" onClick={()=>setJobs(p=>p.filter(x=>x.id!==j.id))}><Trash2 size={16}/></button></div></div>)}</div>}<div className="notice">Open a draft in the Generator to create and download its images.</div></section>}
 {tab==='Distribution'&&<div className="twoCols"><section className="panel"><h3>Marketplace export profiles</h3><div className="marketcard"><div className="marketicon">A</div><div><b>Adobe Stock</b><small>Platform-specific metadata, AI disclosure and raster export</small></div><span className="tag">Profile</span></div><div className="marketcard"><div className="marketicon pink">F</div><div><b>Freepik / Magnific</b><small>Platform-specific file preparation and AI metadata</small></div><span className="tag">Profile</span></div><div className="notice"><ShieldCheck size={16}/>Marketplace rules change. The final app must use versioned rules and human review before submission.</div></section><section className="panel"><h3>Export center</h3><p>Metadata and downloadable assets are prepared separately for each marketplace.</p><div className="previewline"><span>Available image assets</span><b>{assets.length}</b></div><div className="previewline"><span>Draft jobs</span><b>{jobs.length}</b></div><button className="primary full" onClick={exportCSV}><Download size={17}/> Export metadata CSV (draft)</button><button className="outline full" onClick={()=>downloadJSON('stock-studio-jobs.json',jobs)}><Download size={17}/> Export jobs JSON</button><div className="notice">CSV is a generic draft, not a guaranteed marketplace-ready upload template. PNG/JPEG/ZIP export requires actual generated assets.</div></section></div>}
-{tab==='Settings'&&<div className="twoCols"><ProviderSettings key={user?.uid ?? 'guest'} user={user} connected={connections} onConnect={connectProvider} onDisconnect={disconnectProvider}/><section className="panel"><h3>Workspace data</h3><p>Skill and job drafts are stored in this browser. Sign in to save or load your Firestore workspace.</p><button className="outline full" onClick={()=>downloadJSON('stock-studio-backup.json',{skills,jobs,assets})}><Download size={17}/> Download workspace backup</button><CloudWorkspace user={user} workspace={workspace} onLoad={loadWorkspace}/><div className="settingblock"><b>Next integration milestones</b>{['Cloud Storage for images','Provider adapters and job workers'].map(x=><div className="workflow" key={x}><CheckCircle2 size={16}/>{x}</div>)}</div></section></div>}
+{tab==='Settings'&&<div className="twoCols"><ProviderSettings connected={connections} onConnect={connectProvider} onDisconnect={disconnectProvider}/><section className="panel"><h3>Workspace data</h3><p>Skill and job drafts are stored in this browser. Sign in to save or load your Firestore workspace.</p><button className="outline full" onClick={()=>downloadJSON('stock-studio-backup.json',{skills,jobs,assets})}><Download size={17}/> Download workspace backup</button><CloudWorkspace user={user} workspace={workspace} onLoad={loadWorkspace}/><div className="settingblock"><b>Next integration milestones</b>{['Cloud Storage for images','Provider adapters and job workers'].map(x=><div className="workflow" key={x}><CheckCircle2 size={16}/>{x}</div>)}</div></section></div>}
 </main>{toast&&<div className="toast"><CheckCircle2 size={16}/>{toast}</div>}{showSkill&&<SkillModal initial={editing} onClose={()=>{setShowSkill(false);setEditing(null)}} onSave={addSkill}/>}</div>}
 function Stat({title,value,icon:Icon}){return <div className="stat"><div><small>{title}</small><strong>{value}</strong></div><div className="staticon"><Icon size={22}/></div></div>}
 function Empty({icon:Icon,title,detail}){return <div className="empty"><Icon size={32}/><h3>{title}</h3><p>{detail}</p></div>}

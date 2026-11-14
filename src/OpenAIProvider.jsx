@@ -9,15 +9,15 @@ export const providers = {
   flux: 'FLUX · Black Forest Labs',
 };
 
-export async function requestProvider(user, body) {
+export async function requestProvider(body) {
   let response;
-  const token = await user.getIdToken();
   try {
     response = await fetch(endpoint, {
       method: 'POST',
-      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       cache: 'no-store',
+      redirect: 'error',
     });
   } catch {
     throw new Error('The generation backend is unreachable. Try again later.');
@@ -35,37 +35,38 @@ export async function requestProvider(user, body) {
   return response.json();
 }
 
-export default function ProviderSettings({ user, connected, onConnect, onDisconnect }) {
+export default function ProviderSettings({ connected, onConnect, onDisconnect }) {
   const [provider, setProvider] = useState('openai');
   const [key, setKey] = useState('');
-  const [available, setAvailable] = useState(undefined);
+  const [backend, setBackend] = useState(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
     if (!endpoint) {
-      setAvailable(false);
+      setBackend(null);
       return;
     }
     const controller = new AbortController();
-    fetch(endpoint, { cache: 'no-store', signal: controller.signal })
+    fetch(endpoint, { cache: 'no-store', signal: controller.signal, redirect: 'error' })
       .then(response => response.ok ? response.json() : null)
-      .then(data => setAvailable(data?.providers ?? (data?.model ? { openai: data.model } : false)))
-      .catch(() => { if (!controller.signal.aborted) setAvailable(false); });
+      .then(data => { if (!controller.signal.aborted) setBackend(data?.providers ? data : null); })
+      .catch(() => { if (!controller.signal.aborted) setBackend(null); });
     return () => controller.abort();
   }, []);
 
   const connection = connected[provider];
-  const supported = Boolean(available?.[provider]);
+  const byokReady = backend?.authentication === 'provider-key';
+  const supported = Boolean(byokReady && backend.providers?.[provider]);
 
   async function verify(event) {
     event.preventDefault();
     const enteredKey = key.trim();
-    if (!supported || !user || !enteredKey || busy) return;
+    if (!supported || !enteredKey || busy) return;
     setBusy(true);
     setError('');
     try {
-      const { model } = await requestProvider(user, { provider, key: enteredKey, action: 'verify' });
+      const { model } = await requestProvider({ provider, key: enteredKey, action: 'verify' });
       onConnect(provider, { key: enteredKey, model });
       setKey('');
     } catch (problem) {
@@ -93,16 +94,16 @@ export default function ProviderSettings({ user, connected, onConnect, onDisconn
           <small>{connection ? 'Key verified · ' + connection.model : 'Disconnected'}</small>
         </div>
       </div>
-      {available === undefined && <p role="status">Checking the generation backend…</p>}
-      {available === false && <p role="status">The Cloudflare Worker is unavailable. Check its deployment and URL before verifying your key.</p>}
-      {!user && <p>Sign in under Firebase workspace to connect an API key.</p>}
-      {available && !supported && <p role="status">Deploy the latest Worker to enable {providers[provider]}.</p>}
-      {supported && user && !connection && (
+      {backend === undefined && <p role="status">Checking the generation backend…</p>}
+      {backend === null && <p role="status">The Cloudflare Worker is unavailable.</p>}
+      {backend && !byokReady && <p role="status">Deploy the latest Worker to verify API keys directly here.</p>}
+      {byokReady && !supported && <p role="status">{providers[provider]} is unavailable on this Worker.</p>}
+      {!connection && (
         <form onSubmit={verify} autoComplete="off">
           <label htmlFor="openai-key">{providers[provider]} API key</label>
           <input id="openai-key" type="password" autoComplete="off" spellCheck={false}
             value={key} onChange={event => setKey(event.target.value)} maxLength={503} required />
-          <button className="primary full" disabled={busy || !key.trim()}>
+          <button className="primary full" disabled={!supported || busy || !key.trim()}>
             {busy ? 'Checking key…' : 'Verify and connect'}
           </button>
         </form>
