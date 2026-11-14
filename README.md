@@ -81,10 +81,11 @@ npx wrangler deploy
 Set the GitHub Actions repository variable `VITE_OPENAI_WORKER_URL` to the HTTPS
 Worker URL, then run **Deploy to GitHub Pages**. The Worker verifies Firebase
 ID tokens, accepts browser requests from the production Pages origin, and sends
-generation requests to OpenAI. Firebase Spark handles authentication and workspace
+generation requests to the selected provider. Firebase Spark handles authentication and workspace
 storage.
 
-After Firebase sign-in, enter an OpenAI project API key in **Settings → OpenAI ·
-BYOK**. The key stays in tab memory and is sent via HTTPS only when verifying the
-key or generating an image. The Generator can generate and download one PNG at
-a time. Image API billing and quotas depend on the OpenAI project.
+After Firebase sign-in, choose OpenAI Images, Google Gemini, or FLUX (Black Forest Labs)
+in **Settings → AI providers · BYOK** and verify that provider’s API key. The key stays in tab memory and is sent via HTTPS only when verifying the
+key or generating an image. Choose a connected provider in the Generator. Single, multi-angle, and batch
+outputs are generated in sequence and can be downloaded individually. Image
+format, transparency, billing, and quotas depend on the selected provider.
