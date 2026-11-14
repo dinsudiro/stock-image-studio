@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { KeyRound } from 'lucide-react';
 
-const endpoint = 'https://asia-southeast1-stock-image-studio.cloudfunctions.net/studioOpenAI';
+const endpoint = import.meta.env.VITE_OPENAI_WORKER_URL;
 
 export async function requestOpenAI(user, body) {
   let response;
@@ -36,6 +36,10 @@ export default function OpenAIProvider({ user, connected, onConnect, onDisconnec
   const [error, setError] = useState('');
 
   useEffect(() => {
+    if (!endpoint) {
+      setAvailable(false);
+      return;
+    }
     const controller = new AbortController();
     fetch(endpoint, { cache: 'no-store', signal: controller.signal })
       .then(response => response.ok ? response.json() : null)
@@ -72,7 +76,7 @@ export default function OpenAIProvider({ user, connected, onConnect, onDisconnec
         </div>
       </div>
       {available === undefined && <p role="status">Checking the generation backend…</p>}
-      {available === false && <p role="status">The Firebase generation backend is unavailable. Deploy the studioOpenAI function to enable API key verification.</p>}
+      {available === false && <p role="status">The Cloudflare Worker is unavailable. Check its deployment and URL before verifying your key.</p>}
       {!user && <p>Sign in under Firebase workspace to connect an API key.</p>}
       {available && user && !connected && (
         <form onSubmit={verify} autoComplete="off">
