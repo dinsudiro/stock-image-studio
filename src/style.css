@@ -4,3 +4,6 @@
 .cloudWorkspace h4 { margin: 0 0 .5rem; }
 .cloudActions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
 .cloudWorkspace [role="status"]:empty { display: none; }
+
+.generatedImage img { display: block; width: 100%; object-fit: contain; max-height: 420px; background-color: #e5e7eb; }
+.generatedImage a { display: flex; justify-content: center; text-decoration: none; }
