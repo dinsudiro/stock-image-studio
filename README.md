@@ -71,20 +71,20 @@ Generated raster assets must not be mislabeled as editable vectors. Platform-spe
 
 ## OpenAI BYOK
 
-Deploy the `studioOpenAI` HTTPS function to `stock-image-studio` using an
-authorized Firebase account. Firebase requires the Blaze plan for Cloud
-Functions. The deploy targets the function only and leaves existing Firestore
-rules in place.
+Deploy the Worker on Cloudflare Workers Free:
 
 ```bash
-npm ci --prefix functions
-firebase deploy --project stock-image-studio --only functions:studioOpenAI
+cd worker
+npx wrangler deploy
 ```
 
-The function accepts Firebase ID tokens and forwards requests only to OpenAI.
-Enter an OpenAI project API key in **Settings → OpenAI · BYOK** after Firebase
-sign-in. The key is held in memory, cleared on sign-out or reload, and sent
-over HTTPS only to the function per request. Verification checks model
-metadata without generating an image. The Generator can create and download
-one PNG at a time. Save larger jobs as drafts. Images stay in the current tab
-until downloaded. Model access, billing and quotas depend on the OpenAI project.
+Set the GitHub Actions repository variable `VITE_OPENAI_WORKER_URL` to the HTTPS
+Worker URL, then run **Deploy to GitHub Pages**. The Worker verifies Firebase
+ID tokens, accepts browser requests from the production Pages origin, and sends
+generation requests to OpenAI. Firebase Spark handles authentication and workspace
+storage.
+
+After Firebase sign-in, enter an OpenAI project API key in **Settings → OpenAI ·
+BYOK**. The key stays in tab memory and is sent via HTTPS only when verifying the
+key or generating an image. The Generator can generate and download one PNG at
+a time. Image API billing and quotas depend on the OpenAI project.
