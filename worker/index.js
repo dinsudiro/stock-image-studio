@@ -40,9 +40,11 @@ export default {
 
     const { provider = 'openai', action, key, prompt, quality } = input ?? {};
     if (!Object.hasOwn(MODELS, provider)) return reply(400, { error: 'Unsupported provider.' });
-    if (typeof key !== 'string' || !/^[A-Za-z0-9_-]{15,503}$/.test(key) ||
+    // Gemini authorization keys can contain dots. The provider validates the credential.
+    const keyPattern = provider === 'gemini' ? /^[A-Za-z0-9._-]{15,503}$/ : /^[A-Za-z0-9_-]{15,503}$/;
+    if (typeof key !== 'string' || !keyPattern.test(key) ||
         (provider === 'openai' && !key.startsWith('sk-'))) {
-      return reply(400, { error: 'Enter a valid API key for the selected provider.' });
+      return reply(400, { error: 'Paste the provider API key only, without spaces, quotes, or a Bearer prefix.' });
     }
 
     const generating = action === 'generate';
@@ -107,6 +109,9 @@ async function fetchProvider(url, options) {
   if (response.ok) return response;
   const details = await response.json().catch(() => ({}));
   const code = details.error?.code;
+  if (details.error?.details?.some?.(detail => detail?.reason === 'API_KEY_INVALID')) {
+    throw new ProviderError(422, 'Google rejected this API key. Check that it is active in Google AI Studio.');
+  }
   if (response.status === 402 || ['billing_hard_limit_reached', 'insufficient_quota'].includes(code)) {
     throw new ProviderError(402, 'Check billing and credits for this provider.');
   }
