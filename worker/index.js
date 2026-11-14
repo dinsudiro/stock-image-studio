@@ -1,47 +1,11 @@
-const PROJECT_ID = 'stock-image-studio';
 const APP_ORIGIN = 'https://dinsudiro.github.io';
 const MODELS = {
   openai: 'gpt-image-2.5-flare',
   gemini: 'gemini-2.5-flash-image',
   flux: 'flux-2-pro',
 };
-const KEY_URL = 'https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com';
-let keyCache;
-
 function decodeBase64(value) {
   return Uint8Array.from(atob(value.replaceAll('-', '+').replaceAll('_', '/')), char => char.charCodeAt(0));
-}
-
-async function firebaseKey(kid) {
-  if (!keyCache || keyCache.expires <= Date.now()) {
-    const response = await fetch(KEY_URL, { signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error('Firebase keys unavailable');
-    const { keys } = await response.json();
-    const maxAge = Number(response.headers.get('cache-control')?.match(/max-age=(\d+)/)?.[1] ?? 0);
-    keyCache = { keys, expires: Date.now() + maxAge * 1000 };
-  }
-  const jwk = keyCache.keys.find(key => key.kid === kid);
-  if (!jwk) throw new Error('Unknown signing key');
-  return crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
-}
-
-async function verifyFirebaseToken(token) {
-  if (!token || token.length > 8192 || !/^[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) return false;
-  const [header, payload, signature] = token.split('.');
-  const decoder = new TextDecoder();
-  const { alg, kid } = JSON.parse(decoder.decode(decodeBase64(header)));
-  if (alg !== 'RS256' || typeof kid !== 'string') return false;
-
-  const claims = JSON.parse(decoder.decode(decodeBase64(payload)));
-  const now = Math.floor(Date.now() / 1000);
-  if (claims.aud !== PROJECT_ID || claims.iss !== 'https://securetoken.google.com/' + PROJECT_ID ||
-      typeof claims.sub !== 'string' || !claims.sub || claims.sub.length > 128 ||
-      !Number.isSafeInteger(claims.exp) || claims.exp <= now ||
-      !Number.isSafeInteger(claims.iat) || claims.iat > now ||
-      !Number.isSafeInteger(claims.auth_time) || claims.auth_time > now) return false;
-
-  return crypto.subtle.verify('RSASSA-PKCS1-v1_5', await firebaseKey(kid),
-    decodeBase64(signature), new TextEncoder().encode(header + '.' + payload));
 }
 
 export default {
@@ -53,26 +17,24 @@ export default {
     if (origin) {
       headers.set('Access-Control-Allow-Origin', APP_ORIGIN);
       headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+      headers.set('Access-Control-Allow-Headers', 'Content-Type');
     }
 
     if (new URL(request.url).pathname !== '/') return reply(404, { error: 'Not found.' });
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers });
-    if (request.method === 'GET') return reply(200, { model: MODELS.openai, providers: MODELS });
+    if (request.method === 'GET') return reply(200, { model: MODELS.openai, providers: MODELS, authentication: 'provider-key' });
     if (request.method !== 'POST') return reply(405, { error: 'Use POST.' });
 
-    const token = request.headers.get('Authorization')?.match(/^Bearer (\S+)$/)?.[1];
-    const valid = await verifyFirebaseToken(token).catch(() => false);
-    if (!valid) return reply(401, { error: 'Sign in to Firebase first, or sign in again.' });
+    if (origin !== APP_ORIGIN) return reply(403, { error: 'Open Stock Image Studio to use BYOK.' });
+    if (request.headers.get('Content-Type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+      return reply(415, { error: 'Expected a JSON request.' });
+    }
 
-    const length = request.headers.get('Content-Length');
-    if (length !== null && Number(length) > 65536) return reply(413, { error: 'Request is too large.' });
-    const raw = await request.text();
-    if (raw.length > 65536) return reply(413, { error: 'Request is too large.' });
     let input;
     try {
-      input = JSON.parse(raw);
-    } catch {
+      input = await readInput(request);
+    } catch (error) {
+      if (error instanceof ProviderError) return reply(error.status, { error: error.message });
       return reply(400, { error: 'Expected a JSON request.' });
     }
 
@@ -105,6 +67,33 @@ export default {
     }
   },
 };
+
+async function readInput(request) {
+  const maxBytes = 65536;
+  if (Number(request.headers.get('Content-Length')) > maxBytes) {
+    throw new ProviderError(413, 'Request is too large.');
+  }
+  const reader = request.body?.getReader();
+  if (!reader) throw new SyntaxError('Missing body');
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = '';
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        void reader.cancel().catch(() => {});
+        throw new ProviderError(413, 'Request is too large.');
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    return JSON.parse(text + decoder.decode());
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 class ProviderError extends Error {
   constructor(status, message) {
